@@ -1,3 +1,33 @@
+# project-specific files
+# ─────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# ─────────────────────────────────────────────
+# Environment & Secrets
+# ─────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─────────────────────────────────────────────
+# Claude Code session data
+# ─────────────────────────────────────────────
+.claude/
+
+# ─────────────────────────────────────────────
+# Test / runtime artifacts
+# ─────────────────────────────────────────────
+payload.json
+response.json
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
