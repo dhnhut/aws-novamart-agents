@@ -472,7 +472,7 @@ def build_policy_agent() -> Agent:
     retriever_model = BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
-        temperature=0.2,
+        temperature=0.0,
     )
 
     # TODO: Build ReturnsPolicyRetrieverAgent
@@ -691,13 +691,23 @@ def build_orchestrator_agent(
     model = BedrockModel(
         model_id=config.ORCHESTRATOR_MODEL_ID,
         region_name=config.AWS_REGION,
-        temperature=0.3,
+        temperature=0.0,
     )
 
     # TODO: System prompt for the Orchestrator
     prompt = """
     You are the Orchestrator Agent. Your job is to route customer requests to the appropriate worker agents (Inventory, Policy, Refund, Communication) and manage the shared WorkflowState in DynamoDB.
     Always try initialize_session in the beginning, then read the complete WorkflowState right after to understand what the other agents have found and decided. Use this information to determine which agent(s) to call next, and update the WorkflowState with their findings.
+
+    You must enforce these routing rules exactly:
+    1. Every request, always: call initialize_session first.
+    2. Order status / return / refund requests: call route_to_inventory_agent, then route_to_refund_agent.
+    3. Policy meaning questions (windows, rates, terms): call route_to_policy_agent.
+    4. Account questions ("what is my tier?", "am I premium?"): call route_to_inventory_agent - never route_to_policy_agent (it only knows policy text, not customer data).
+    5. Math / calculation questions: answer directly - no routing needed.
+    6. Every request, always (last step): call route_to_communication_agent to compose the final reply.
+
+    CRITICAL: You are never permitted to write the final customer-facing response yourself. You must always delegate to route_to_communication_agent as your very last action - no exceptions, even when you believe you already have a complete answer.
     """
 
     # Shared routing helper: runs a specialist agent, then records its
