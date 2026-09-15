@@ -365,13 +365,27 @@ def build_refund_agent() -> Agent:
 
     Makes return/refund eligibility decisions based on order facts from
     WorkflowState and applies the correct policy window per customer tier.
+
+    Policy windows: Standard customers = 30 days, Premium customers = 60 days.
     """
 
     # TODO: Create a BedrockModel
-    pass
+    model = BedrockModel(
+        model_id=config.WORKER_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.1,
+    )
 
     # TODO: System prompt for the Refund Agent
-    pass
+    system_prompt = """
+    You are a Refund Agent. Your job is to make return/refund eligibility decisions based on order facts from WorkflowState.
+
+    Policy windows: Standard customers may return an order within 30 days of the order date;
+    Premium customers within 60 days. Before calling initiate_refund, call get_inventory_context
+    to check the order's order_date and the customer's tier. If the order is outside the policy
+    window for that tier, do NOT call initiate_refund - explain to the customer that the return
+    window has passed. Only call initiate_refund when the return is within the policy window.
+    """
 
     # TODO: Implement get_inventory_context
     @tool
@@ -385,15 +399,17 @@ def build_refund_agent() -> Agent:
         Returns:
             The inventory_agent field from WorkflowState, or empty dict if not yet set
         """
-        pass
+        state = _read_workflow_state(session_id)
+        return state.get("inventory_agent", {})
 
     # TODO: Implement initiate_refund
     @tool
-    def initiate_refund(customer_id: str, order_id: str, reason: str) -> dict:
+    def initiate_refund(session_id: str, customer_id: str, order_id: str, reason: str) -> dict:
         """
         Initiate a return by updating the order record in DynamoDB.
 
         Args:
+            session_id: The current session identifier
             customer_id: The customer's unique identifier
             order_id: The order to return
             reason: Customer-provided reason for the return
@@ -401,10 +417,32 @@ def build_refund_agent() -> Agent:
         Returns:
             Confirmation dict with return_reference number and instructions
         """
-        pass
+        expected_version = _read_workflow_state(session_id).get("version", 0)
+        return_reference = f"REF-{uuid.uuid4().hex[:8].upper()}"
+        update = {
+            "customer_id": customer_id,
+            "order_id": order_id,
+            "reason": reason,
+            "return_reference": return_reference,
+        }
+
+        _update_workflow_state(
+            session_id,
+            updates={"refund_agent": update},
+            expected_version=expected_version
+        )
+
+        return {
+            "return_reference": return_reference,
+            "instructions": "Please check your email for further instructions."
+        }
 
     # TODO: Instantiate and return the Agent
-    pass
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[get_inventory_context, initiate_refund]
+    )
 
 
 # ───────────────────────────────────────────────────────
@@ -420,32 +458,65 @@ def build_policy_agent() -> Agent:
     the combined results into a complete, grounded policy answer.
     """
 
+    retriever_model = BedrockModel(
+        model_id=config.WORKER_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.2,
+    )
+
     # TODO: Build ReturnsPolicyRetrieverAgent
     @tool
     def retrieve_returns_policy(query: str) -> str:
         """Retrieve relevant passages from the Returns Policy knowledge base."""
-        pass
+        results = retrieve_from_knowledge_base(config.RETURNS_KB_ID, query)
+        return format_kb_results(results)
 
     # Create the ReturnsPolicyRetrieverAgent with the tool above
-    pass
+    returns_retriever = Agent(
+        model=retriever_model,
+        system_prompt="""
+        You are a Returns Policy specialist. Use retrieve_returns_policy to
+        answer questions about the returns policy, grounded only in the
+        retrieved passages.
+        """,
+        tools=[retrieve_returns_policy],
+    )
 
     # TODO: Build ShippingPolicyRetrieverAgent
     @tool
     def retrieve_shipping_policy(query: str) -> str:
         """Retrieve relevant passages from the Shipping Policy knowledge base."""
-        pass
+        results = retrieve_from_knowledge_base(config.SHIPPING_KB_ID, query)
+        return format_kb_results(results)
 
     # Create the ShippingPolicyRetrieverAgent with the tool above
-    pass
+    shipping_retriever = Agent(
+        model=retriever_model,
+        system_prompt="""
+        You are a Shipping Policy specialist. Use retrieve_shipping_policy to
+        answer questions about the shipping policy, grounded only in the
+        retrieved passages.
+        """,
+        tools=[retrieve_shipping_policy],
+    )
 
     # TODO: Build WarrantyPolicyRetrieverAgent
     @tool
     def retrieve_warranty_policy(query: str) -> str:
         """Retrieve relevant passages from the Warranty Policy knowledge base."""
-        pass
+        results = retrieve_from_knowledge_base(config.WARRANTY_KB_ID, query)
+        return format_kb_results(results)
 
     # Create the WarrantyPolicyRetrieverAgent with the tool above
-    pass
+    warranty_retriever = Agent(
+        model=retriever_model,
+        system_prompt="""
+        You are a Warranty Policy specialist. Use retrieve_warranty_policy to
+        answer questions about the warranty policy, grounded only in the
+        retrieved passages.
+        """,
+        tools=[retrieve_warranty_policy],
+    )
 
     # TODO: Implement search_all_policies - parallel RAG retrieval tool
     @tool
@@ -464,6 +535,11 @@ def build_policy_agent() -> Agent:
         """
         # Build a dict mapping domain names to their retriever agents
         # e.g. {'Returns': returns_retriever, 'Shipping': shipping_retriever, ...}
+        retrievers = {
+            'Returns':  returns_retriever,
+            'Shipping': shipping_retriever,
+            'Warranty': warranty_retriever,
+        }
 
         # ── Trace: show parallel KB dispatch to learners ──────────────────
         trace.kb_start({
@@ -486,27 +562,56 @@ def build_policy_agent() -> Agent:
             Results are returned as values and printed cleanly and
             sequentially by trace.kb_result() after all futures join.
             """
-            pass
+            try:
+                return domain, str(agent(query))
+            except Exception as exc:
+                return domain, f"[{domain} policy lookup failed: {exc}]"
 
         # Use ThreadPoolExecutor to run all three retrievers in parallel
         # Collect results into a dict: {'Returns': '...', 'Shipping': '...', ...}
+        results = {}
+        with ThreadPoolExecutor(max_workers=len(retrievers)) as executor:
+            futures = [
+                executor.submit(_run_retriever, domain, agent, query)
+                for domain, agent in retrievers.items()
+            ]
+            for future in as_completed(futures):
+                domain, result_text = future.result()
+                results[domain] = result_text
 
         # ── Trace: all KBs responded - print each result sequentially ─────
-        # trace.kb_done(len(retrievers))
-        # for domain in ['Returns', 'Shipping', 'Warranty']:
-        #     trace.kb_result(domain, results.get(domain, '[No results]'))
+        trace.kb_done(len(retrievers))
+        for domain in ['Returns', 'Shipping', 'Warranty']:
+            trace.kb_result(domain, results.get(domain, '[No results]'))
 
         # Combine results from all three domains and return
-        pass
+        return "\n\n".join(
+            f"=== {domain} Policy ===\n{results.get(domain, '[No results]')}"
+            for domain in ['Returns', 'Shipping', 'Warranty']
+        )
 
     # TODO: Create a BedrockModel for the PolicyAgent coordinator
-    pass
+    model = BedrockModel(
+        model_id=config.WORKER_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.2,
+    )
 
     # TODO: System prompt for PolicyAgent coordinator
-    pass
+    system_prompt = """
+    You are a Policy Agent. Your job is to answer customer questions about
+    store policy (returns, shipping, and warranty terms) using only the
+    search_all_policies tool. Do not answer from memory - always call
+    search_all_policies first and ground your answer in the returned
+    passages. You do not have access to customer or order data.
+    """
 
     # TODO: Instantiate and return the PolicyAgent coordinator
-    pass
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[search_all_policies],
+    )
 
 
 # ───────────────────────────────────────────────────────
