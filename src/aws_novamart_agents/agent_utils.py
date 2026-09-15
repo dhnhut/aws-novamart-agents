@@ -23,9 +23,10 @@ import io
 import threading
 import time
 
-# Ensure parent directory is on sys.path so config.py is importable
-# regardless of where this module is imported from.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ensure the project root (two levels up: src/aws_novamart_agents -> src -> root)
+# is on sys.path so config.py is importable regardless of where this module
+# is imported from.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import config
 

@@ -22,22 +22,27 @@ load_dotenv()
 # ─────────────────────────────────────────────
 # REGION & PROJECT SETTINGS
 # ─────────────────────────────────────────────
-AWS_REGION   = os.environ.get('AWS_REGION', 'us-east-1')
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 PROJECT_NAME = os.environ.get('PROJECT_NAME', 'udacity-agentcore')
-ACCOUNT_ID   = boto3.client('sts', region_name=AWS_REGION).get_caller_identity()['Account']
+ACCOUNT_ID = boto3.client(
+    'sts', region_name=AWS_REGION).get_caller_identity()['Account']
 
 # ─────────────────────────────────────────────
 # FOUNDATION MODELS
 # ─────────────────────────────────────────────
 # Orchestrator agent: Claude 3 Haiku - fast, cost-efficient routing decisions
-ORCHESTRATOR_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# ORCHESTRATOR_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+ORCHESTRATOR_MODEL_ID = "amazon.nova-pro-v1:0"
 
 # Worker agents: Claude 3 Sonnet - more capable for reasoning and generation
 WORKER_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+WORKER_MODEL_ID = "amazon.nova-pro-v1:0"
 
 # ─────────────────────────────────────────────
 # CLOUDFORMATION EXPORTS LOADER
 # ─────────────────────────────────────────────
+
+
 def _load_cf_exports() -> dict:
     """Load all CloudFormation stack exports into a dict."""
     cf = boto3.client('cloudformation', region_name=AWS_REGION)
@@ -48,7 +53,9 @@ def _load_cf_exports() -> dict:
             exports[export['Name']] = export['Value']
     return exports
 
+
 _exports = _load_cf_exports()
+
 
 def _get(key: str, fallback_env: str = None) -> str:
     """Get a CloudFormation export value, with optional env var fallback."""
@@ -61,6 +68,7 @@ def _get(key: str, fallback_env: str = None) -> str:
             f"Ensure the infrastructure stack is deployed."
         )
     return value
+
 
 def _get_env(key: str, required: bool = True) -> str:
     """Get a value from environment variables (for resources not in CloudFormation)."""
@@ -78,12 +86,12 @@ def _get_env(key: str, required: bool = True) -> str:
 # ─────────────────────────────────────────────
 
 # DynamoDB
-ORDERS_TABLE         = _get('OrdersTable')
-CUSTOMERS_TABLE      = _get('CustomersTable')
+ORDERS_TABLE = _get('OrdersTable')
+CUSTOMERS_TABLE = _get('CustomersTable')
 WORKFLOW_STATE_TABLE = _get('WorkflowStateTable')
 
 # S3
-POLICY_BUCKET      = _get('PolicyBucket')
+POLICY_BUCKET = _get('PolicyBucket')
 VECTOR_STORE_BUCKET = _get('VectorBucket')
 
 # IAM
@@ -98,6 +106,8 @@ AGENT_LOG_GROUP = _get('AgentLogGroup')
 #   1. CloudFormation exports - populated automatically when full_stack.yaml is deployed
 #   2. .env file - populated manually when pre_deployed_stack.yaml is used (student path)
 # ─────────────────────────────────────────────
+
+
 def _get_kb_id(cf_key: str, env_key: str) -> str:
     """Try CloudFormation export first, then fall back to env var. Never raises."""
     value = _exports.get(f"{PROJECT_NAME}-{cf_key}", '')
@@ -105,7 +115,8 @@ def _get_kb_id(cf_key: str, env_key: str) -> str:
         value = os.environ.get(env_key, '')
     return value
 
-RETURNS_KB_ID  = _get_kb_id('ReturnsKbId',  'RETURNS_KB_ID')
+
+RETURNS_KB_ID = _get_kb_id('ReturnsKbId',  'RETURNS_KB_ID')
 SHIPPING_KB_ID = _get_kb_id('ShippingKbId', 'SHIPPING_KB_ID')
 WARRANTY_KB_ID = _get_kb_id('WarrantyKbId', 'WARRANTY_KB_ID')
 
@@ -118,8 +129,10 @@ WARRANTY_KB_ID = _get_kb_id('WarrantyKbId', 'WARRANTY_KB_ID')
 AGENTCORE_RUNTIME_ARN = os.environ.get('AGENTCORE_RUNTIME_ARN', '')
 
 # Task 3: Guardrail - try CloudFormation export first (full_stack.yaml), then .env
-GUARDRAIL_ID      = _exports.get(f"{PROJECT_NAME}-GuardrailId",      os.environ.get('GUARDRAIL_ID', ''))
-GUARDRAIL_VERSION = _exports.get(f"{PROJECT_NAME}-GuardrailVersion", os.environ.get('GUARDRAIL_VERSION', 'DRAFT'))
+GUARDRAIL_ID = _exports.get(
+    f"{PROJECT_NAME}-GuardrailId",      os.environ.get('GUARDRAIL_ID', ''))
+GUARDRAIL_VERSION = _exports.get(
+    f"{PROJECT_NAME}-GuardrailVersion", os.environ.get('GUARDRAIL_VERSION', 'DRAFT'))
 
 # Task 4: AgentCore Memory namespace
 MEMORY_NAMESPACE = f"{PROJECT_NAME}-memory"
@@ -137,6 +150,8 @@ GUARDRAIL_BLOCKED_TOPICS = [
 # ─────────────────────────────────────────────
 # UTILITY
 # ─────────────────────────────────────────────
+
+
 def print_config():
     """Pretty-print the current configuration for debugging."""
     def _display(label: str, value: str, placeholder: str = "(not yet set)") -> None:
@@ -161,7 +176,8 @@ def print_config():
     _display("Warranty KB ID:",      WARRANTY_KB_ID, "(not yet created)")
     print("  " + "-"*56)
     _display("Runtime ARN:",         AGENTCORE_RUNTIME_ARN, "(not yet deployed)")
-    _display("Guardrail ID:",        GUARDRAIL_ID,          "(not yet created)")
+    _display("Guardrail ID:",        GUARDRAIL_ID,
+             "(not yet created)")
     print("="*60 + "\n")
 
 

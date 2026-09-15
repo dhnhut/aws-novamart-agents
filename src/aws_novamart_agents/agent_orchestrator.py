@@ -58,10 +58,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-# Ensure the parent directory is on sys.path so config.py and
-# bedrock_kb_retrieval.py are importable regardless of where this
-# script is invoked from (e.g. python src/agent_orchestrator.py)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ensure the project root is on sys.path so config.py is importable
+# regardless of where this script is invoked from (e.g. python src/agent_orchestrator.py)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # Configure logging for debugging
 logging.basicConfig(
@@ -856,8 +855,66 @@ def create_guardrail() -> tuple[str, str]:
     #   - blockedInputMessaging and blockedOutputsMessaging
 
     # Promote from DRAFT to a versioned guardrail using create_guardrail_version()
+    print(f"Creating guardrail: {config.GUARDRAIL_NAME}")
 
-    pass
+    response = bedrock_client.create_guardrail(
+        name=config.GUARDRAIL_NAME,
+        description="Enterprise safety guardrail for NovaMart customer support agents",
+        contentPolicyConfig={
+            'filtersConfig': [
+                {'type': 'SEXUAL', 'inputStrength': 'HIGH', 'outputStrength': 'HIGH'},
+                {'type': 'VIOLENCE', 'inputStrength': 'HIGH',
+                    'outputStrength': 'HIGH'},
+                {'type': 'HATE', 'inputStrength': 'HIGH', 'outputStrength': 'HIGH'},
+                {'type': 'INSULTS', 'inputStrength': 'HIGH',
+                    'outputStrength': 'HIGH'},
+                {'type': 'MISCONDUCT', 'inputStrength': 'HIGH',
+                    'outputStrength': 'HIGH'},
+                {'type': 'PROMPT_ATTACK', 'inputStrength': 'HIGH',
+                    'outputStrength': 'NONE'},
+            ]
+        },
+        sensitiveInformationPolicyConfig={
+            'piiEntitiesConfig': [
+                {'type': 'CREDIT_DEBIT_CARD_NUMBER', 'action': 'BLOCK'},
+                {'type': 'US_SOCIAL_SECURITY_NUMBER', 'action': 'BLOCK'},
+                {'type': 'EMAIL', 'action': 'ANONYMIZE'},
+                {'type': 'PHONE', 'action': 'ANONYMIZE'},
+            ]
+        },
+        topicPolicyConfig={
+            'topicsConfig': [
+                {
+                    'name': topic.title().replace(' ', ''),
+                    'definition': f"Discussion involving {topic}.",
+                    'type': 'DENY',
+                }
+                for topic in config.GUARDRAIL_BLOCKED_TOPICS
+            ]
+        },
+        wordPolicyConfig={
+            'managedWordListsConfig': [{'type': 'PROFANITY'}],
+        },
+        blockedInputMessaging=(
+            "I'm not able to help with that request. "
+            "Please rephrase or ask about your order, returns, or shipping."
+        ),
+        blockedOutputsMessaging=(
+            "I'm not able to provide that information. "
+            "Please contact support for further assistance."
+        ),
+    )
+    guardrail_id = response['guardrailId']
+
+    # Promote DRAFT to a versioned guardrail
+    version_response = bedrock_client.create_guardrail_version(
+        guardrailIdentifier=guardrail_id,
+        description="Initial published version",
+    )
+    guardrail_version = version_response['version']
+
+    print(f"Guardrail created: {guardrail_id} (version: {guardrail_version})")
+    return guardrail_id, guardrail_version
 
 
 def deploy_to_agentcore_runtime(
