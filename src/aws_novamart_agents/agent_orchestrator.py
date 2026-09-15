@@ -25,6 +25,24 @@ OrchestratorAgent creates state at start, each routing tool reads and
 updates it after the worker responds.
 """
 
+# ─────────────────────────────────────────────────────
+# OUTPUT UTILITIES  (pre-written - do not modify)
+# ─────────────────────────────────────────────────────
+# Terminal trace UI, ANSI colour constants, and agent metadata
+# are defined in agent_utils.py - keeping this file focused on
+# agent architecture.
+from agent_utils import (
+    _C, _trace_print, _trace_writer, _real_stdout, _TraceWriter,
+    _strip_xml_tags, AgentTrace, _AGENT_META,
+)
+
+# Strands Agents SDK - see: https://github.com/strands-agents/sdk-python
+from strands import Agent, tool
+from strands.models import BedrockModel
+from boto3.dynamodb.conditions import Key
+from bedrock_kb_retrieval import retrieve_from_knowledge_base, format_kb_results
+import config
+
 import boto3
 import json
 import time
@@ -45,14 +63,6 @@ from typing import Optional
 # script is invoked from (e.g. python src/agent_orchestrator.py)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Strands Agents SDK - see: https://github.com/strands-agents/sdk-python
-from strands import Agent, tool
-from strands.models import BedrockModel
-from boto3.dynamodb.conditions import Key
-
-import config
-from bedrock_kb_retrieval import retrieve_from_knowledge_base, format_kb_results
-
 # Configure logging for debugging
 logging.basicConfig(
     level=logging.WARNING,
@@ -60,31 +70,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-# ─────────────────────────────────────────────────────
-# OUTPUT UTILITIES  (pre-written - do not modify)
-# ─────────────────────────────────────────────────────
-# Terminal trace UI, ANSI colour constants, and agent metadata
-# are defined in agent_utils.py - keeping this file focused on
-# agent architecture.
-from agent_utils import (
-    _C, _trace_print, _trace_writer, _real_stdout, _TraceWriter,
-    _strip_xml_tags, AgentTrace, _AGENT_META,
-)
-
-
-
-
+dynamodb = boto3.resource('dynamodb', region_name=config.AWS_REGION)
+# s3 = boto3.client('s3', region_name=config.AWS_REGION)
 
 # ─────────────────────────────────────────────────────
 # AWS CLIENTS (pre-written - do not modify)
 # ─────────────────────────────────────────────────────
-bedrock_agent_client = boto3.client('bedrock-agent', region_name=config.AWS_REGION)
-bedrock_runtime      = boto3.client('bedrock-runtime', region_name=config.AWS_REGION)
-agentcore_client     = boto3.client('bedrock-agentcore', region_name=config.AWS_REGION)
-agentcore_control    = boto3.client('bedrock-agentcore-control', region_name=config.AWS_REGION)
-dynamodb             = boto3.resource('dynamodb', region_name=config.AWS_REGION)
-logs_client          = boto3.client('logs', region_name=config.AWS_REGION)
+bedrock_agent_client = boto3.client(
+    'bedrock-agent', region_name=config.AWS_REGION)
+bedrock_runtime = boto3.client(
+    'bedrock-runtime', region_name=config.AWS_REGION)
+agentcore_client = boto3.client(
+    'bedrock-agentcore', region_name=config.AWS_REGION)
+agentcore_control = boto3.client(
+    'bedrock-agentcore-control', region_name=config.AWS_REGION)
+dynamodb = boto3.resource('dynamodb', region_name=config.AWS_REGION)
+logs_client = boto3.client('logs', region_name=config.AWS_REGION)
 
 
 # ─────────────────────────────────────────────────────
@@ -97,7 +98,8 @@ def _register_agentcore_compat_methods():
     def _add_methods(class_attributes, base_classes, **kwargs):
         def get_agent_runtime(self, agentRuntimeId, **kw):
             try:
-                response = _control.get_agent_runtime(agentRuntimeId=agentRuntimeId)
+                response = _control.get_agent_runtime(
+                    agentRuntimeId=agentRuntimeId)
             except Exception:
                 response = {}
             response['memoryConfiguration'] = {
@@ -145,10 +147,12 @@ def _register_agentcore_compat_methods():
 
         def _patched_get(*args, **kwargs):
             sess = _original_get(*args, **kwargs)
-            sess.register('creating-client-class.bedrock-agentcore', _add_methods)
+            sess.register(
+                'creating-client-class.bedrock-agentcore', _add_methods)
             return sess
 
         _bc_session.get_session = _patched_get
+
 
 _register_agentcore_compat_methods()
 
@@ -231,7 +235,7 @@ def _update_workflow_state(session_id: str, updates: dict,
             update_expr = "SET " + ", ".join(update_expr_parts)
 
             expr_values = {f":{k}": v for k, v in updates.items()}
-            expr_values[':new_version']      = expected_version + 1
+            expr_values[':new_version'] = expected_version + 1
             expr_values[':expected_version'] = expected_version
 
             table.update_item(
@@ -277,13 +281,36 @@ def build_inventory_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel using the WORKER model
-    pass
+    model = BedrockModel(
+        model_id=config.WORKER_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.1,
+    )
 
     # TODO: System prompt for the Inventory Agent
-    pass
+    system_prompt = """
+    You are an Inventory Agent. Your job is to gather order and customer facts from DynamoDB.
+    Do not make any decisions or provide any opinions. Only retrieve the data requested.
+    """
 
     # TODO: Implement check_order_status tool
-    pass
+    @tool
+    def check_order_status(customer_id: str, order_id: str) -> dict:
+        """
+        Retrieve the status of a specific order for a customer from DynamoDB.
+
+        Args:
+            customer_id: The customer's unique identifier
+            order_id:    The order's unique identifier
+
+        Returns:
+            The status of the order
+        """
+
+        table = dynamodb.Table(config.ORDERS_TABLE)
+        response = table.get_item(
+            Key={"customer_id": customer_id, "order_id": order_id})
+        return response.get("Item", {})
 
     # TODO: Implement get_customer_tier
     @tool
@@ -298,7 +325,9 @@ def build_inventory_agent() -> Agent:
         Returns:
             Customer profile including tier and account details
         """
-        pass
+        table = dynamodb.Table(config.CUSTOMERS_TABLE)
+        response = table.get_item(Key={"customer_id": customer_id})
+        return response.get("Item", {})
 
     # TODO: Implement list_customer_orders
     @tool
@@ -312,10 +341,18 @@ def build_inventory_agent() -> Agent:
         Returns:
             List of all orders with order_id, status, order_date, and amount
         """
-        pass
+        table = dynamodb.Table(config.ORDERS_TABLE)
+        response = table.query(
+            KeyConditionExpression=Key("customer_id").eq(customer_id)
+        )
+        return response.get("Items", [])
 
     # TODO: Instantiate and return the Agent
-    pass
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[check_order_status, get_customer_tier, list_customer_orders],
+    )
 
 
 # ───────────────────────────────────────────────────────
@@ -634,12 +671,14 @@ def create_guardrail() -> tuple[str, str]:
     for g in existing.get('guardrails', []):
         if g['name'] == config.GUARDRAIL_NAME:
             guardrail_id = g['id']
-            versions = bedrock_client.list_guardrails(guardrailIdentifier=guardrail_id)
+            versions = bedrock_client.list_guardrails(
+                guardrailIdentifier=guardrail_id)
             guardrail_version = 'DRAFT'
             for v in versions.get('guardrails', []):
                 if v.get('version', 'DRAFT') != 'DRAFT':
                     guardrail_version = v['version']
-            print(f"Guardrail already exists: {guardrail_id} (version: {guardrail_version})")
+            print(
+                f"Guardrail already exists: {guardrail_id} (version: {guardrail_version})")
             return guardrail_id, guardrail_version
 
     # TODO: Create the guardrail
@@ -674,7 +713,7 @@ def deploy_to_agentcore_runtime(
         The AgentCore Runtime ARN
     """
     runtime_name = f"{config.PROJECT_NAME}-runtime".replace('-', '_')
-    s3_client    = boto3.client('s3', region_name=config.AWS_REGION)
+    s3_client = boto3.client('s3', region_name=config.AWS_REGION)
 
     # Check if runtime already exists
     try:
@@ -687,7 +726,7 @@ def deploy_to_agentcore_runtime(
     except Exception as e:
         print(f"  [Note] Could not check existing runtimes: {e}")
 
-    sts        = boto3.client('sts', region_name=config.AWS_REGION)
+    sts = boto3.client('sts', region_name=config.AWS_REGION)
     account_id = sts.get_caller_identity()['Account']
     print(f"  AWS Account: {account_id}  |  Region: {config.AWS_REGION}")
 
@@ -706,7 +745,8 @@ def deploy_to_agentcore_runtime(
         'before-call.bedrock-agentcore-control.CreateAgentRuntime',
         _inject_guardrail,
     )
-    print(f"  Guardrail hook registered: {guardrail_id} (v{guardrail_version})")
+    print(
+        f"  Guardrail hook registered: {guardrail_id} (v{guardrail_version})")
 
     # NOTE: AgentCore API — S3 artifact requirement.
     # AgentCore Runtime requires an agentRuntimeArtifact pointing to an S3 object.
@@ -812,9 +852,12 @@ def configure_observability(runtime_arn: str) -> None:
 # ═══════════════════════════════════════════════════════
 
 # Lambda function names for gateway tool backends (set in .env after deploying)
-_ORDERS_FUNCTION    = os.environ.get('ORDERS_FUNCTION',    f"{config.PROJECT_NAME}-orders-api")
-_POLICY_FUNCTION    = os.environ.get('POLICY_FUNCTION',    f"{config.PROJECT_NAME}-policy-api")
-_CUSTOMERS_FUNCTION = os.environ.get('CUSTOMERS_FUNCTION', f"{config.PROJECT_NAME}-customers-api")
+_ORDERS_FUNCTION = os.environ.get(
+    'ORDERS_FUNCTION',    f"{config.PROJECT_NAME}-orders-api")
+_POLICY_FUNCTION = os.environ.get(
+    'POLICY_FUNCTION',    f"{config.PROJECT_NAME}-policy-api")
+_CUSTOMERS_FUNCTION = os.environ.get(
+    'CUSTOMERS_FUNCTION', f"{config.PROJECT_NAME}-customers-api")
 
 
 def _gw_get_function_arn(function_name: str) -> str:
@@ -837,9 +880,9 @@ def _gw_stack_uuid() -> str:
 def _gw_wait_for_ready(agentcore_ctrl, gateway_id: str, timeout: int = 120) -> str:
     """Poll until the gateway reaches READY status. Returns the gateway URL."""
     deadline = time.time() + timeout
-    first    = True
+    first = True
     while time.time() < deadline:
-        gw     = agentcore_ctrl.get_gateway(gatewayIdentifier=gateway_id)
+        gw = agentcore_ctrl.get_gateway(gatewayIdentifier=gateway_id)
         status = gw['status']
         if status == 'READY':
             if not first:
@@ -858,7 +901,7 @@ def _gw_wait_for_ready(agentcore_ctrl, gateway_id: str, timeout: int = 120) -> s
 
 
 def _gw_get_or_create(agentcore_ctrl, name: str, role_arn: str,
-                       instructions: str) -> tuple[str, str]:
+                      instructions: str) -> tuple[str, str]:
     """Create an AgentCore Gateway, or reuse it if it already exists."""
     try:
         gw = agentcore_ctrl.create_gateway(
@@ -867,9 +910,9 @@ def _gw_get_or_create(agentcore_ctrl, name: str, role_arn: str,
             protocolType='MCP',
             authorizerType='NONE',
             protocolConfiguration={'mcp': {'instructions': instructions,
-                                            'searchType': 'SEMANTIC'}},
+                                           'searchType': 'SEMANTIC'}},
         )
-        gw_id  = gw['gatewayId']
+        gw_id = gw['gatewayId']
         print(f'    Gateway ID  : {gw_id}')
         print(f'    Status      : {gw["status"]}')
         gw_url = _gw_wait_for_ready(agentcore_ctrl, gw_id)
@@ -880,8 +923,9 @@ def _gw_get_or_create(agentcore_ctrl, name: str, role_arn: str,
         gateways = agentcore_ctrl.list_gateways().get('items', [])
         existing = next((g for g in gateways if g['name'] == name), None)
         if not existing:
-            raise RuntimeError(f"Gateway '{name}' not found after ConflictException")
-        gw_id  = existing['gatewayId']
+            raise RuntimeError(
+                f"Gateway '{name}' not found after ConflictException")
+        gw_id = existing['gatewayId']
         print(f'    Gateway ID  : {gw_id}')
         gw_url = _gw_wait_for_ready(agentcore_ctrl, gw_id)
         print(f'    Gateway URL : {gw_url}')
@@ -889,7 +933,7 @@ def _gw_get_or_create(agentcore_ctrl, name: str, role_arn: str,
 
 
 def _gw_create_target(agentcore_ctrl, gateway_id: str, t: dict,
-                       lambda_arn: str) -> None:
+                      lambda_arn: str) -> None:
     """Register one Lambda target on the gateway. Skips if it already exists."""
     payload = dict(
         gatewayIdentifier=gateway_id,
@@ -924,7 +968,8 @@ def _gw_create_target(agentcore_ctrl, gateway_id: str, t: dict,
     )
     try:
         resp = agentcore_ctrl.create_gateway_target(**payload)
-        print(f"    [{resp['status']:12s}] {t['name']} → target {resp['targetId']}")
+        print(
+            f"    [{resp['status']:12s}] {t['name']} → target {resp['targetId']}")
     except agentcore_ctrl.exceptions.ConflictException:
         print(f"    [already exists] {t['name']} — skipped")
 
@@ -950,7 +995,7 @@ def deploy_agentcore_gateway() -> dict:
         dict with gateway_id, gateway_url, and status.
     """
     agentcore_ctrl = boto3.client('bedrock-agentcore-control',
-                                   region_name=config.AWS_REGION)
+                                  region_name=config.AWS_REGION)
 
     try:
         gw_uuid = _gw_stack_uuid()
@@ -1044,9 +1089,9 @@ def deploy_all():
     print("="*60 + "\n")
 
     print("Step 1/6: Building agent graph...")
-    inventory_agent     = build_inventory_agent()
-    refund_agent        = build_refund_agent()
-    policy_agent        = build_policy_agent()
+    inventory_agent = build_inventory_agent()
+    refund_agent = build_refund_agent()
+    policy_agent = build_policy_agent()
     communication_agent = build_communication_agent()
     orchestrator = build_orchestrator_agent(
         inventory_agent, refund_agent, policy_agent, communication_agent
@@ -1058,7 +1103,8 @@ def deploy_all():
     print()
 
     print("Step 3/6: Deploying to AgentCore Runtime...")
-    runtime_arn = deploy_to_agentcore_runtime(orchestrator, guardrail_id, guardrail_version)
+    runtime_arn = deploy_to_agentcore_runtime(
+        orchestrator, guardrail_id, guardrail_version)
     print()
 
     print("Step 4/6: Configuring Memory...")
@@ -1095,9 +1141,9 @@ if __name__ == '__main__':
 
     elif len(sys.argv) > 1 and sys.argv[1] == 'test':
         print("Running local agent test...")
-        inventory_agent     = build_inventory_agent()
-        refund_agent        = build_refund_agent()
-        policy_agent        = build_policy_agent()
+        inventory_agent = build_inventory_agent()
+        refund_agent = build_refund_agent()
+        policy_agent = build_policy_agent()
         communication_agent = build_communication_agent()
         orchestrator = build_orchestrator_agent(
             inventory_agent, refund_agent, policy_agent, communication_agent
@@ -1124,8 +1170,10 @@ if __name__ == '__main__':
         # ── Welcome banner ────────────────────────────────────────────────
         print()
         print(f"  {_C.GRY}{'=' * W}{_C.RESET}")
-        print(f"  {_C.ORCH}{_C.BOLD}{'NovaMart -- Multi-Agent Customer Support':^{W}}{_C.RESET}")
-        print(f"  {_C.GRY}{'Strands Agents SDK  +  Amazon Bedrock AgentCore':^{W}}{_C.RESET}")
+        print(
+            f"  {_C.ORCH}{_C.BOLD}{'NovaMart -- Multi-Agent Customer Support':^{W}}{_C.RESET}")
+        print(
+            f"  {_C.GRY}{'Strands Agents SDK  +  Amazon Bedrock AgentCore':^{W}}{_C.RESET}")
         print(f"  {_C.GRY}{'=' * W}{_C.RESET}")
 
         # ── Test customers ────────────────────────────────────────────────
@@ -1133,11 +1181,14 @@ if __name__ == '__main__':
         print(f"  {_C.GRY}{'─' * W}{_C.RESET}")
         print(f"  {_C.BOLD}Test Customers{_C.RESET}")
         print(f"  {_C.GRY}{'─' * W}{_C.RESET}")
-        print(f"  {_C.GRY}{'ID':<10}  {'Name':<18}  {'Tier':<10}  {'Order':<12}  Product{_C.RESET}")
+        print(
+            f"  {_C.GRY}{'ID':<10}  {'Name':<18}  {'Tier':<10}  {'Order':<12}  Product{_C.RESET}")
         print(f"  {_C.GRY}{'─'*8}  {'─'*16}  {'─'*8}  {'─'*10}  {'─'*20}{_C.RESET}")
         for cid, name, tier, order, product in [
-            ("CUST-001", "Alice Johnson", "Premium",  "ORD-27176", "Sony headphones"),
-            ("CUST-002", "Bob Smith",     "Standard", "ORD-28001", "mechanical keyboard"),
+            ("CUST-001", "Alice Johnson", "Premium",
+             "ORD-27176", "Sony headphones"),
+            ("CUST-002", "Bob Smith",     "Standard",
+             "ORD-28001", "mechanical keyboard"),
             ("CUST-003", "Carol Davis",   "Premium",  "ORD-29001", "laptop"),
             ("CUST-004", "David Lee",     "Standard", "ORD-30001", "phone case"),
         ]:
@@ -1151,27 +1202,33 @@ if __name__ == '__main__':
             input(f"  Enter Customer ID (default: CUST-001): ").strip()
             or "CUST-001"
         )
-        session_id  = str(uuid.uuid4())[:8]
+        session_id = str(uuid.uuid4())[:8]
         print()
         print(f"  {_C.GRY}Session  : {_C.RESET}{_C.BOLD}{session_id}{_C.RESET}")
         print(f"  {_C.GRY}Customer : {_C.RESET}{_C.BOLD}{customer_id}{_C.RESET}")
-        print(f"  {_C.GRY}Type a question and press Enter.  Type 'quit' to exit.{_C.RESET}")
+        print(
+            f"  {_C.GRY}Type a question and press Enter.  Type 'quit' to exit.{_C.RESET}")
         print()
 
         # ── Build agents (one line per agent so students see initialisation order)
         print(f"  {_C.GRY}[SYSTEM]  Initializing agent graph...{_C.RESET}")
-        inventory_agent     = build_inventory_agent()
-        print(f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  InventoryAgent{_C.RESET}",    flush=True)
-        refund_agent        = build_refund_agent()
-        print(f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  RefundAgent{_C.RESET}",       flush=True)
-        policy_agent        = build_policy_agent()
-        print(f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  PolicyAgent{_C.RESET}",       flush=True)
+        inventory_agent = build_inventory_agent()
+        print(
+            f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  InventoryAgent{_C.RESET}",    flush=True)
+        refund_agent = build_refund_agent()
+        print(
+            f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  RefundAgent{_C.RESET}",       flush=True)
+        policy_agent = build_policy_agent()
+        print(
+            f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  PolicyAgent{_C.RESET}",       flush=True)
         communication_agent = build_communication_agent()
-        print(f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  CommunicationAgent{_C.RESET}", flush=True)
+        print(
+            f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  CommunicationAgent{_C.RESET}", flush=True)
         orchestrator = build_orchestrator_agent(
             inventory_agent, refund_agent, policy_agent, communication_agent
         )
-        print(f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  Orchestrator{_C.RESET}",      flush=True)
+        print(
+            f"  {_C.GRY}          {_C.OK}[OK]{_C.RESET}{_C.GRY}  Orchestrator{_C.RESET}",      flush=True)
         print(f"  {_C.GRY}[SYSTEM]  All 5 agents ready.{_C.RESET}")
         print()
 
@@ -1191,8 +1248,8 @@ if __name__ == '__main__':
                 print(f"  {_C.GRY}Session ended.{_C.RESET}")
                 break
 
-            prompt  = (f"[Session ID: {session_id}] "
-                       f"[Customer ID: {customer_id}] {user_input}")
+            prompt = (f"[Session ID: {session_id}] "
+                      f"[Customer ID: {customer_id}] {user_input}")
             t0_turn = time.time()
 
             # ── Install proxy, run orchestrator, restore stdout ────────────
