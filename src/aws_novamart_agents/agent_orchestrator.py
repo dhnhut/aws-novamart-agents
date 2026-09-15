@@ -60,7 +60,8 @@ from typing import Optional
 
 # Ensure the project root is on sys.path so config.py is importable
 # regardless of where this script is invoked from (e.g. python src/agent_orchestrator.py)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
 
 # Configure logging for debugging
 logging.basicConfig(
@@ -995,10 +996,40 @@ def deploy_to_agentcore_runtime(
     #   - agentRuntimeArtifact pointing to the S3 zip uploaded above
     #     (bucket: config.POLICY_BUCKET, prefix: artifact_key, runtime: PYTHON_3_12)
     #   - environmentVariables (AWS_REGION, PROJECT_NAME, KB IDs, AGENT_LOG_GROUP)
-    # Note: guardrailConfiguration is injected automatically via the event hook above.
-    # Return: response.get('agentRuntimeArn', response.get('arn', ''))
 
-    pass
+    print(f"  Calling create_agent_runtime (name: {runtime_name})...")
+    response = agentcore_control.create_agent_runtime(
+        agentRuntimeName=runtime_name,
+        description="NovaMart multi-agent customer support orchestrator",
+        roleArn=config.AGENTCORE_ROLE_ARN,
+        networkConfiguration={'networkMode': 'PUBLIC'},
+        protocolConfiguration={'serverProtocol': 'MCP'},
+        agentRuntimeArtifact={
+            'codeConfiguration': {
+                'code': {
+                    's3': {
+                        'bucket': config.POLICY_BUCKET,
+                        'prefix': artifact_key,
+                    }
+                },
+                'runtime': 'PYTHON_3_12',
+                'entryPoint': ['main.py'],
+            }
+        },
+        environmentVariables={
+            'AWS_REGION':      config.AWS_REGION,
+            'PROJECT_NAME':    config.PROJECT_NAME,
+            'RETURNS_KB_ID':   config.RETURNS_KB_ID,
+            'SHIPPING_KB_ID':  config.SHIPPING_KB_ID,
+            'WARRANTY_KB_ID':  config.WARRANTY_KB_ID,
+            'AGENT_LOG_GROUP': config.AGENT_LOG_GROUP,
+        },
+    )
+    # Note: guardrailConfiguration is injected automatically via the event hook above.
+
+    runtime_arn = response.get('agentRuntimeArn', response.get('arn', ''))
+    print(f"  AgentCore Runtime created: {runtime_arn}")
+    return runtime_arn
 
 
 # ═══════════════════════════════════════════════════════
@@ -1028,7 +1059,26 @@ def configure_memory(runtime_arn: str) -> str:
     #   - memoryStrategies with summaryMemoryStrategy
     #   - clientToken for idempotency
 
-    pass
+    print(f"Creating AgentCore Memory: {memory_name}")
+
+    response = agentcore_control.create_memory(
+        name=memory_name,
+        description="Session-scoped conversational summaries for NovaMart customer support agents",
+        eventExpiryDuration=7,
+        memoryStrategies=[
+            {
+                'summaryMemoryStrategy': {
+                    'name': f"{memory_name}_summary",
+                    'description': 'Summarizes each customer support session',
+                }
+            }
+        ],
+        clientToken=str(uuid.uuid4()),
+    )
+    memory_arn = response['memory']['arn']
+
+    print(f"AgentCore Memory created: {memory_arn}")
+    return memory_arn
 
 
 # ═══════════════════════════════════════════════════════
@@ -1055,7 +1105,32 @@ def configure_observability(runtime_arn: str) -> None:
     # On success: print the CloudWatch log group and X-Ray sampling rate.
     # On exception: print "[Note] Logging config skipped (SDK version mismatch): <e>"
 
-    pass
+    logging_configuration = {
+        'cloudWatchConfig': {
+            'logGroupName': config.AGENT_LOG_GROUP,
+            'logLevel': 'INFO',
+            'enabled': True,
+        },
+        'xRayConfig': {
+            'enabled': True,
+            'samplingRate': 1.0,
+        },
+    }
+
+    try:
+        agentcore_control.put_agent_runtime_logging_configuration(
+            agentRuntimeId=runtime_id,
+            loggingConfiguration=logging_configuration,
+        )
+        cw_config = logging_configuration['cloudWatchConfig']
+        xray_config = logging_configuration['xRayConfig']
+        print(
+            f"  Observability configured: CloudWatch log group "
+            f"'{cw_config['logGroupName']}' (level={cw_config['logLevel']}), "
+            f"X-Ray sampling rate={xray_config['samplingRate']}"
+        )
+    except Exception as e:
+        print(f"[Note] Logging config skipped (SDK version mismatch): {e}")
 
 
 # ═══════════════════════════════════════════════════════

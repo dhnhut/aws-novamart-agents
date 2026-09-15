@@ -319,6 +319,10 @@ class TestTask3(unittest.TestCase):
 class TestTask4(unittest.TestCase):
 
     def setUp(self):
+        try:
+            import agent_orchestrator  # noqa: F401 - registers bedrock-agentcore compat patch
+        except ImportError as e:
+            self.fail(f"Could not import agent_orchestrator: {e}")
         self.agentcore = boto3.client('bedrock-agentcore', region_name=config.AWS_REGION)
 
     def test_4_1_memory_is_configured(self):
