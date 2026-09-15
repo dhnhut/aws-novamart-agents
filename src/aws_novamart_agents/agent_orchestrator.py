@@ -419,13 +419,6 @@ def build_refund_agent() -> Agent:
         """
         state = _read_workflow_state(session_id)
 
-        if not state:
-            try:
-                state = _create_workflow_state(session_id, customer_id)
-            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
-                # Another concurrent call already created the state - use it.
-                state = _read_workflow_state(session_id)
-
         expected_version = state.get("version", 0)
 
         return_reference = f"REF-{uuid.uuid4().hex[:8].upper()}"
@@ -694,7 +687,29 @@ def build_orchestrator_agent(
     )
 
     # TODO: System prompt for the Orchestrator
-    pass
+    prompt = """
+    You are the Orchestrator Agent. Your job is to route customer requests to the appropriate worker agents (Inventory, Policy, Refund, Communication) and manage the shared WorkflowState in DynamoDB.
+    Always try initialize_session in the beginning, then read the complete WorkflowState right after to understand what the other agents have found and decided. Use this information to determine which agent(s) to call next, and update the WorkflowState with their findings.
+    """
+
+    # Shared routing helper: runs a specialist agent, then records its
+    # result in the shared WorkflowState (with tracing for the terminal UI).
+    def _route_and_update(column: str, agent: Agent, session_id: str,
+                          prompt: str, customer_id: str = None) -> str:
+        # trace.step_start(column)
+        # trace.agent_section(_AGENT_META[column][1])
+        result = str(agent(prompt))
+
+        state = _read_workflow_state(session_id)
+        # if not state:
+        #     state = _create_workflow_state(
+        #         session_id, customer_id or "unknown")
+        expected_version = state.get("version", 0)
+
+        _update_workflow_state(
+            session_id, updates={column: result}, expected_version=expected_version)
+        # trace.step_done(column, expected_version)
+        return result
 
     # TODO: Implement route_to_inventory_agent
     @tool
@@ -711,7 +726,9 @@ def build_orchestrator_agent(
         Returns:
             Inventory facts retrieved by the InventoryAgent
         """
-        pass
+        prompt = f"[Customer ID: {customer_id}] {request}"
+        return _route_and_update("inventory_agent", inventory_agent, session_id,
+                                 prompt, customer_id)
 
     # TODO: Implement route_to_policy_agent
     @tool
@@ -727,7 +744,7 @@ def build_orchestrator_agent(
         Returns:
             Policy information retrieved and synthesized by PolicyAgent
         """
-        pass
+        return _route_and_update("policy_agent", policy_agent, session_id, request)
 
     # TODO: Implement route_to_refund_agent
     @tool
@@ -744,7 +761,9 @@ def build_orchestrator_agent(
         Returns:
             Refund decision from the RefundAgent
         """
-        pass
+        prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+        return _route_and_update("refund_agent", refund_agent, session_id,
+                                 prompt, customer_id)
 
     # TODO: Implement route_to_communication_agent
     @tool
@@ -762,7 +781,9 @@ def build_orchestrator_agent(
         Returns:
             Final customer-facing response drafted by CommunicationAgent
         """
-        pass
+        prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {original_request}"
+        return _route_and_update("communication_agent", communication_agent, session_id,
+                                 prompt, customer_id)
 
     # TODO: Implement initialize_session
     @tool
@@ -778,10 +799,24 @@ def build_orchestrator_agent(
         Returns:
             Confirmation that the session was initialized
         """
-        pass
+        try:
+            _create_workflow_state(session_id, customer_id)
+            return f"Session {session_id} initialized for customer {customer_id}."
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            return f"Session {session_id} already initialized."
 
     # TODO: Instantiate and return the OrchestratorAgent
-    pass
+    return Agent(
+        model=model,
+        system_prompt=prompt,
+        tools=[
+            initialize_session,
+            route_to_inventory_agent,
+            route_to_policy_agent,
+            route_to_refund_agent,
+            route_to_communication_agent,
+        ],
+    )
 
 
 # ═══════════════════════════════════════════════════════

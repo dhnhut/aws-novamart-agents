@@ -22,7 +22,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 # Add parent dir to path so we can import student files
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'aws_novamart_agents'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config
 
