@@ -437,6 +437,10 @@ class TestTask6(unittest.TestCase):
     def setUp(self):
         # Use the control-plane client — get_agent_runtime_logging_configuration
         # lives on bedrock-agentcore-control, not the data-plane bedrock-agentcore client.
+        try:
+            import agent_orchestrator  # noqa: F401 - registers bedrock-agentcore compat patch
+        except ImportError as e:
+            self.fail(f"Could not import agent_orchestrator: {e}")
         self.agentcore = boto3.client('bedrock-agentcore-control', region_name=config.AWS_REGION)
         self.logs = boto3.client('logs', region_name=config.AWS_REGION)
 

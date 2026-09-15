@@ -136,19 +136,27 @@ def _register_agentcore_compat_methods():
         class_attributes['get_agent_runtime_logging_configuration'] = get_agent_runtime_logging_configuration
         class_attributes['put_agent_runtime_logging_configuration'] = put_agent_runtime_logging_configuration
 
+    # get_agent_runtime (fake memoryConfiguration/codeInterpreterConfiguration)
+    # is exercised via the data-plane 'bedrock-agentcore' client;
+    # get/put_agent_runtime_logging_configuration are exercised via the
+    # control-plane 'bedrock-agentcore-control' client - patch both classes.
+    _compat_events = [
+        'creating-client-class.bedrock-agentcore',
+        'creating-client-class.bedrock-agentcore-control',
+    ]
+
     import boto3 as _boto3
     if _boto3.DEFAULT_SESSION is not None:
-        _boto3.DEFAULT_SESSION._session.register(
-            'creating-client-class.bedrock-agentcore', _add_methods
-        )
+        for _event in _compat_events:
+            _boto3.DEFAULT_SESSION._session.register(_event, _add_methods)
     else:
         import botocore.session as _bc_session
         _original_get = _bc_session.get_session
 
         def _patched_get(*args, **kwargs):
             sess = _original_get(*args, **kwargs)
-            sess.register(
-                'creating-client-class.bedrock-agentcore', _add_methods)
+            for _event in _compat_events:
+                sess.register(_event, _add_methods)
             return sess
 
         _bc_session.get_session = _patched_get
