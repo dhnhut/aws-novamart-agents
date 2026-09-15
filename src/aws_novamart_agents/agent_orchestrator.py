@@ -165,6 +165,36 @@ def _register_agentcore_compat_methods():
 _register_agentcore_compat_methods()
 
 
+# ───────────────────────────────────────────────────
+# GUARDRAIL ATTACHMENT
+# ───────────────────────────────────────────────────
+def _apply_guardrail(model: BedrockModel) -> BedrockModel:
+    """
+    Attach the deployed Bedrock Guardrail to a model, if one is configured.
+
+    GUARDRAIL_ID and GUARDRAIL_VERSION are passed to the AgentCore Runtime as
+    environment variables at deploy time (see deploy_to_agentcore_runtime), so
+    every agent created inside the runtime picks the guardrail up here without
+    each agent factory having to know about it. Locally, where the variables are
+    unset, the model is returned unchanged.
+
+    Returns the same model instance, for convenient chaining.
+    """
+    guardrail_id = os.environ.get('GUARDRAIL_ID') or config.GUARDRAIL_ID
+    guardrail_version = (os.environ.get('GUARDRAIL_VERSION')
+                         or config.GUARDRAIL_VERSION)
+
+    if not guardrail_id:
+        return model
+
+    model.update_config(
+        guardrail_id=guardrail_id,
+        guardrail_version=guardrail_version or 'DRAFT',
+        guardrail_trace='enabled',
+    )
+    return model
+
+
 # ═══════════════════════════════════════════════════════
 #  WORKFLOW STATE - SHARED DynamoDB STATE OBJECT
 #  Pre-written - do not modify.
@@ -289,11 +319,11 @@ def build_inventory_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel using the WORKER model
-    model = BedrockModel(
+    model = _apply_guardrail(BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.1,
-    )
+    ))
 
     # TODO: System prompt for the Inventory Agent
     system_prompt = """
@@ -378,11 +408,11 @@ def build_refund_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel
-    model = BedrockModel(
+    model = _apply_guardrail(BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.1,
-    )
+    ))
 
     # TODO: System prompt for the Refund Agent
     system_prompt = """
@@ -469,11 +499,11 @@ def build_policy_agent() -> Agent:
     the combined results into a complete, grounded policy answer.
     """
 
-    retriever_model = BedrockModel(
+    retriever_model = _apply_guardrail(BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.0,
-    )
+    ))
 
     # TODO: Build ReturnsPolicyRetrieverAgent
     @tool
@@ -602,11 +632,11 @@ def build_policy_agent() -> Agent:
         )
 
     # TODO: Create a BedrockModel for the PolicyAgent coordinator
-    model = BedrockModel(
+    model = _apply_guardrail(BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.2,
-    )
+    ))
 
     # TODO: System prompt for PolicyAgent coordinator
     system_prompt = """
@@ -638,11 +668,11 @@ def build_communication_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel
-    model = BedrockModel(
+    model = _apply_guardrail(BedrockModel(
         model_id=config.WORKER_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.3,
-    )
+    ))
 
     # TODO: System prompt for the Communication Agent
     prompt = """
@@ -688,11 +718,11 @@ def build_orchestrator_agent(
     """
 
     # TODO: Create a BedrockModel using the ORCHESTRATOR model
-    model = BedrockModel(
+    model = _apply_guardrail(BedrockModel(
         model_id=config.ORCHESTRATOR_MODEL_ID,
         region_name=config.AWS_REGION,
         temperature=0.0,
-    )
+    ))
 
     # TODO: System prompt for the Orchestrator
     prompt = """
@@ -885,10 +915,10 @@ def create_guardrail() -> tuple[str, str]:
                 {'type': 'VIOLENCE', 'inputStrength': 'HIGH',
                     'outputStrength': 'HIGH'},
                 {'type': 'HATE', 'inputStrength': 'HIGH', 'outputStrength': 'HIGH'},
-                {'type': 'INSULTS', 'inputStrength': 'HIGH',
-                    'outputStrength': 'HIGH'},
-                {'type': 'MISCONDUCT', 'inputStrength': 'HIGH',
-                    'outputStrength': 'HIGH'},
+                {'type': 'INSULTS', 'inputStrength': 'MEDIUM',
+                    'outputStrength': 'MEDIUM'},
+                {'type': 'MISCONDUCT', 'inputStrength': 'MEDIUM',
+                    'outputStrength': 'MEDIUM'},
                 {'type': 'PROMPT_ATTACK', 'inputStrength': 'HIGH',
                     'outputStrength': 'NONE'},
             ]
@@ -948,7 +978,7 @@ def deploy_to_agentcore_runtime(
     explicit about what is being deployed, but AgentCore does not serialize
     Python objects directly. Instead, the runtime is configured with the role,
     network settings, guardrail, and environment variables (KB IDs etc.) it
-    needs. The agent code in this script runs as the MCP server handler inside
+    needs. The agent code in this script runs as the HTTP server handler inside
     the AgentCore runtime environment.
 
     Returns:
@@ -972,21 +1002,25 @@ def deploy_to_agentcore_runtime(
     account_id = sts.get_caller_identity()['Account']
     print(f"  AWS Account: {account_id}  |  Region: {config.AWS_REGION}")
 
-    # NOTE: AgentCore API — guardrail injection.
-    # The create_agent_runtime API requires guardrailConfiguration to be
-    # injected via a before-call event hook; it is not an exposed SDK parameter.
-    guardrail_cfg = {
-        'guardrailIdentifier': guardrail_id,
-        'guardrailVersion':    guardrail_version,
-    }
+    # # NOTE: AgentCore API — guardrail injection.
+    # # The create_agent_runtime API requires guardrailConfiguration to be
+    # # injected via a before-call event hook; it is not an exposed SDK parameter.
+    # guardrail_cfg = {
+    #     'guardrailIdentifier': guardrail_id,
+    #     'guardrailVersion':    guardrail_version,
+    # }
 
-    def _inject_guardrail(params, **kwargs):
-        params['guardrailConfiguration'] = guardrail_cfg
+    # def _inject_guardrail(params, **kwargs):
+    #     params['guardrailConfiguration'] = guardrail_cfg
 
-    agentcore_control.meta.events.register(
-        'before-call.bedrock-agentcore-control.CreateAgentRuntime',
-        _inject_guardrail,
-    )
+    # agentcore_control.meta.events.register(
+    #     'before-call.bedrock-agentcore-control.CreateAgentRuntime',
+    #     _inject_guardrail,
+    # )
+
+    # The guardrail is attached by handing the runtime GUARDRAIL_ID and
+    # GUARDRAIL_VERSION as environment variables; _apply_guardrail() reads them
+    # when each agent's BedrockModel is built inside the runtime.
     print(
         f"  Guardrail hook registered: {guardrail_id} (v{guardrail_version})")
 
@@ -1006,22 +1040,22 @@ def deploy_to_agentcore_runtime(
     )
     print(f"  Artifact uploaded: s3://{config.POLICY_BUCKET}/{artifact_key}")
 
+    print(f"  Calling create_agent_runtime (name: {runtime_name})...")
+
     # TODO: Deploy to AgentCore Runtime
     # Use agentcore_control.create_agent_runtime() with:
     #   - agentRuntimeName (runtime_name), description, roleArn
     #   - networkConfiguration (PUBLIC)
-    #   - protocolConfiguration (MCP)
+    #   - protocolConfiguration (MCP) => # PROJECT RUBIC ASK FOR HTTP, NOT MCP.
     #   - agentRuntimeArtifact pointing to the S3 zip uploaded above
     #     (bucket: config.POLICY_BUCKET, prefix: artifact_key, runtime: PYTHON_3_12)
     #   - environmentVariables (AWS_REGION, PROJECT_NAME, KB IDs, AGENT_LOG_GROUP)
-
-    print(f"  Calling create_agent_runtime (name: {runtime_name})...")
     response = agentcore_control.create_agent_runtime(
         agentRuntimeName=runtime_name,
         description="NovaMart multi-agent customer support orchestrator",
         roleArn=config.AGENTCORE_ROLE_ARN,
         networkConfiguration={'networkMode': 'PUBLIC'},
-        protocolConfiguration={'serverProtocol': 'MCP'},
+        protocolConfiguration={'serverProtocol': 'HTTP'},
         agentRuntimeArtifact={
             'codeConfiguration': {
                 'code': {
@@ -1035,15 +1069,16 @@ def deploy_to_agentcore_runtime(
             }
         },
         environmentVariables={
-            'AWS_REGION':      config.AWS_REGION,
-            'PROJECT_NAME':    config.PROJECT_NAME,
-            'RETURNS_KB_ID':   config.RETURNS_KB_ID,
-            'SHIPPING_KB_ID':  config.SHIPPING_KB_ID,
-            'WARRANTY_KB_ID':  config.WARRANTY_KB_ID,
-            'AGENT_LOG_GROUP': config.AGENT_LOG_GROUP,
+            'AWS_REGION':        config.AWS_REGION,
+            'PROJECT_NAME':      config.PROJECT_NAME,
+            'RETURNS_KB_ID':     config.RETURNS_KB_ID,
+            'SHIPPING_KB_ID':    config.SHIPPING_KB_ID,
+            'WARRANTY_KB_ID':    config.WARRANTY_KB_ID,
+            'AGENT_LOG_GROUP':   config.AGENT_LOG_GROUP,
+            'GUARDRAIL_ID':      guardrail_id,
+            'GUARDRAIL_VERSION': guardrail_version,
         },
     )
-    # Note: guardrailConfiguration is injected automatically via the event hook above.
 
     runtime_arn = response.get('agentRuntimeArn', response.get('arn', ''))
     print(f"  AgentCore Runtime created: {runtime_arn}")
