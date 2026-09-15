@@ -400,7 +400,7 @@ def build_refund_agent() -> Agent:
             The inventory_agent field from WorkflowState, or empty dict if not yet set
         """
         state = _read_workflow_state(session_id)
-        return state.get("inventory_agent", {})
+        return state.get("inventory_agent", {}) if state else {}
 
     # TODO: Implement initiate_refund
     @tool
@@ -417,7 +417,17 @@ def build_refund_agent() -> Agent:
         Returns:
             Confirmation dict with return_reference number and instructions
         """
-        expected_version = _read_workflow_state(session_id).get("version", 0)
+        state = _read_workflow_state(session_id)
+
+        if not state:
+            try:
+                state = _create_workflow_state(session_id, customer_id)
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                # Another concurrent call already created the state - use it.
+                state = _read_workflow_state(session_id)
+
+        expected_version = state.get("version", 0)
+
         return_reference = f"REF-{uuid.uuid4().hex[:8].upper()}"
         update = {
             "customer_id": customer_id,
@@ -627,10 +637,17 @@ def build_communication_agent() -> Agent:
     """
 
     # TODO: Create a BedrockModel
-    pass
+    model = BedrockModel(
+        model_id=config.WORKER_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.3,
+    )
 
     # TODO: System prompt for the Communication Agent
-    pass
+    prompt = """
+    You are a Communication Agent. Your job is to draft the final customer-facing message by reading the full WorkflowState and composing a coherent, empathetic response.
+    Always read the complete WorkflowState first to understand what the other agents have found and decided. Use this information to craft a clear, polite, and helpful message to the customer.
+    """
 
     # TODO: Implement get_full_workflow_context
     @tool
@@ -644,10 +661,15 @@ def build_communication_agent() -> Agent:
         Returns:
             Full WorkflowState dict (inventory_agent, policy_agent, refund_agent)
         """
-        pass
+        state = _read_workflow_state(session_id)
+        return state if state else {}
 
     # TODO: Instantiate and return the Agent
-    pass
+    return Agent(
+        model=model,
+        system_prompt=prompt,
+        tools=[get_full_workflow_context],
+    )
 
 
 # ───────────────────────────────────────────────────────
@@ -665,7 +687,11 @@ def build_orchestrator_agent(
     """
 
     # TODO: Create a BedrockModel using the ORCHESTRATOR model
-    pass
+    model = BedrockModel(
+        model_id=config.ORCHESTRATOR_MODEL_ID,
+        region_name=config.AWS_REGION,
+        temperature=0.3,
+    )
 
     # TODO: System prompt for the Orchestrator
     pass
