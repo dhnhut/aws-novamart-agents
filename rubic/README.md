@@ -1,5 +1,9 @@
 # Project's RUBIC
 
+## .env
+
+![alt text](env.png)
+
 ## `tests/test_agent.py`
 
 ### Task 2:
