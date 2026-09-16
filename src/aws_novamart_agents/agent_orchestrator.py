@@ -766,12 +766,48 @@ def build_orchestrator_agent(
     CRITICAL: You are never permitted to write the final customer-facing response yourself. You must always delegate to route_to_communication_agent as your very last action - no exceptions, even when you believe you already have a complete answer.
     """
 
-    # Shared routing helper: runs a specialist agent, then records its
-    # result in the shared WorkflowState (with tracing for the terminal UI).
+    # Renders what earlier agents have already written into a context block,
+    # in workflow order, so each worker reasons over the shared state instead
+    # of its own prompt alone.
+    def _workflow_context_block(state: dict) -> str:
+        sections = [
+            f"{label}:\n{state[column]}"
+            for column, (_, label, _, _) in _AGENT_META.items()
+            if state.get(column)
+        ]
+        if not sections:
+            return ""
+        return ("Findings already recorded in the shared WorkflowState:\n\n"
+                + "\n\n".join(sections) + "\n\n")
+
+    # Shared routing helper. Every worker-routing tool goes through the same
+    # read -> call -> update sequence:
+    #   1. read WorkflowState (and its version) BEFORE the worker runs,
+    #   2. call the worker with that accumulated context,
+    #   3. write the result back under the version observed in step 1.
+    # Checking the update against the pre-call version is what stops one
+    # worker's write from silently overwriting another's.
     def _route_and_update(column: str, agent: Agent, session_id: str,
                           prompt: str, customer_id: str = None) -> str:
         # trace.step_start(column)
         # trace.agent_section(_AGENT_META[column][1])
+
+        # 1. READ - current context, before the worker call.
+        with xray.aws_subsegment('DynamoDB', operation='GetItem',
+                                 table_name=config.WORKFLOW_STATE_TABLE):
+            state = _read_workflow_state(session_id)
+        if not state:
+            # Session was never initialized (or the record expired) - create it
+            # so the worker still runs against a real, versioned row.
+            try:
+                state = _create_workflow_state(
+                    session_id, customer_id or "unknown")
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                state = _read_workflow_state(session_id) or {}
+        expected_version = int(state.get("version", 0))
+
+        # 2. CALL - the worker receives the current shared context.
+        worker_prompt = _workflow_context_block(state) + prompt
 
         # X-Ray: records the caller-side 'remote' subsegment plus the worker's
         # own segment, which is what draws the Orchestrator -> worker edge in
@@ -780,19 +816,25 @@ def build_orchestrator_agent(
                               {'session_id':  session_id,
                                'customer_id': customer_id,
                                'agent':       column}) as span:
-            result = str(agent(prompt))
+            result = str(agent(worker_prompt))
             span.add_metadata(response_chars=len(result))
 
-        state = _read_workflow_state(session_id)
-        # if not state:
-        #     state = _create_workflow_state(
-        #         session_id, customer_id or "unknown")
-        expected_version = state.get("version", 0)
-
+        # 3. UPDATE - persist the result, checked against the version read in
+        #    step 1. _update_workflow_state re-reads and retries on conflict.
         with xray.aws_subsegment('DynamoDB', operation='UpdateItem',
                                  table_name=config.WORKFLOW_STATE_TABLE):
-            _update_workflow_state(
-                session_id, updates={column: result}, expected_version=expected_version)
+            new_state = _update_workflow_state(
+                session_id, updates={column: result},
+                expected_version=expected_version)
+
+        # A successful worker call must advance the stored state; if it did
+        # not, the result was not persisted and downstream agents would read
+        # stale context.
+        if not new_state or int(new_state.get('version', 0)) <= expected_version:
+            raise RuntimeError(
+                f"WorkflowState did not advance after {column} "
+                f"(session: {session_id}, expected version > {expected_version})"
+            )
         # trace.step_done(column, expected_version)
         return result
 
