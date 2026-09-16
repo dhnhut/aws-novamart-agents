@@ -13,45 +13,53 @@ Run after each task to validate your implementation:
 
 """
 
+import config
 import sys
 import os
 import json
 import time
+import re
 import boto3
 import unittest
 from unittest.mock import patch, MagicMock
 
 # Add parent dir to path so we can import student files
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'aws_novamart_agents'))
+sys.path.insert(0, os.path.join(os.path.dirname(
+    __file__), '..', 'src', 'aws_novamart_agents'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import config
 
 # ─────────────────────────────────────────────────────
 # HELPER UTILITIES
 # ─────────────────────────────────────────────────────
 
+
 class Colors:
-    GREEN  = '\033[92m'
-    RED    = '\033[91m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
     YELLOW = '\033[93m'
-    CYAN   = '\033[96m'
-    BOLD   = '\033[1m'
-    RESET  = '\033[0m'
+    CYAN = '\033[96m'
+    BOLD = '\033[1m'
+    RESET = '\033[0m'
+
 
 def passed(msg):
     print(f"  {Colors.GREEN}✓ PASS{Colors.RESET} {msg}")
+
 
 def failed(msg, detail=""):
     print(f"  {Colors.RED}✗ FAIL{Colors.RESET} {msg}")
     if detail:
         print(f"         {Colors.YELLOW}{detail}{Colors.RESET}")
 
+
 def header(title):
     print(f"\n{Colors.BOLD}{Colors.CYAN}{'─'*55}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.CYAN}  {title}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.CYAN}{'─'*55}{Colors.RESET}")
 
+
 score = {'earned': 0, 'possible': 0}
+
 
 def check(condition, points, pass_msg, fail_msg, detail=""):
     score['possible'] += points
@@ -174,11 +182,12 @@ class TestTask2(unittest.TestCase):
     def test_2_5_orchestrator_instantiates(self):
         """OrchestratorAgent should return a Strands Agent object."""
         try:
-            inventory  = self.ao.build_inventory_agent()
-            refund     = self.ao.build_refund_agent()
-            policy     = self.ao.build_policy_agent()
-            comm       = self.ao.build_communication_agent()
-            orchestrator = self.ao.build_orchestrator_agent(inventory, refund, policy, comm)
+            inventory = self.ao.build_inventory_agent()
+            refund = self.ao.build_refund_agent()
+            policy = self.ao.build_policy_agent()
+            comm = self.ao.build_communication_agent()
+            orchestrator = self.ao.build_orchestrator_agent(
+                inventory, refund, policy, comm)
             check(
                 orchestrator is not None,
                 5,
@@ -191,11 +200,12 @@ class TestTask2(unittest.TestCase):
     def test_2_6_orchestrator_has_routing_tools(self):
         """OrchestratorAgent should have 5 routing tools."""
         try:
-            inventory  = self.ao.build_inventory_agent()
-            refund     = self.ao.build_refund_agent()
-            policy     = self.ao.build_policy_agent()
-            comm       = self.ao.build_communication_agent()
-            orchestrator = self.ao.build_orchestrator_agent(inventory, refund, policy, comm)
+            inventory = self.ao.build_inventory_agent()
+            refund = self.ao.build_refund_agent()
+            policy = self.ao.build_policy_agent()
+            comm = self.ao.build_communication_agent()
+            orchestrator = self.ao.build_orchestrator_agent(
+                inventory, refund, policy, comm)
             tool_count = self._get_tool_count(orchestrator)
             check(
                 tool_count == 5,
@@ -211,16 +221,17 @@ class TestTask2(unittest.TestCase):
     def test_2_7_routing_uses_different_models(self):
         """Orchestrator should use Haiku; Workers should use Sonnet."""
         try:
-            inventory  = self.ao.build_inventory_agent()
-            refund     = self.ao.build_refund_agent()
-            policy     = self.ao.build_policy_agent()
-            comm       = self.ao.build_communication_agent()
-            orchestrator = self.ao.build_orchestrator_agent(inventory, refund, policy, comm)
+            inventory = self.ao.build_inventory_agent()
+            refund = self.ao.build_refund_agent()
+            policy = self.ao.build_policy_agent()
+            comm = self.ao.build_communication_agent()
+            orchestrator = self.ao.build_orchestrator_agent(
+                inventory, refund, policy, comm)
 
             orchestrator_model = self._get_model_id(orchestrator)
-            inventory_model    = self._get_model_id(inventory)
+            inventory_model = self._get_model_id(inventory)
 
-            uses_haiku  = 'haiku' in orchestrator_model.lower()
+            uses_haiku = 'haiku' in orchestrator_model.lower()
             uses_sonnet = 'sonnet' in inventory_model.lower()
 
             check(
@@ -249,7 +260,8 @@ class TestTask3(unittest.TestCase):
 
     def setUp(self):
         self.bedrock = boto3.client('bedrock', region_name=config.AWS_REGION)
-        self.agentcore = boto3.client('bedrock-agentcore', region_name=config.AWS_REGION)
+        self.agentcore = boto3.client(
+            'bedrock-agentcore', region_name=config.AWS_REGION)
 
     def test_3_1_guardrail_exists(self):
         """A Bedrock Guardrail should exist with the correct name."""
@@ -258,7 +270,7 @@ class TestTask3(unittest.TestCase):
             response = self.bedrock.list_guardrails()
             guardrails = response.get('guardrails', [])
             names = [g['name'] for g in guardrails]
-            
+
             check(
                 config.GUARDRAIL_NAME in names,
                 10,
@@ -277,16 +289,16 @@ class TestTask3(unittest.TestCase):
                 check(False, 5, "", "GUARDRAIL_ID not set in environment",
                       "Add GUARDRAIL_ID to your .env file (printed by the deploy command)")
                 return
-            
+
             response = self.bedrock.get_guardrail(
                 guardrailIdentifier=guardrail_id,
                 guardrailVersion=config.GUARDRAIL_VERSION
             )
-            
+
             has_content = 'contentPolicy' in response
-            has_pii     = 'sensitiveInformationPolicy' in response
-            has_topics  = 'topicPolicy' in response
-            
+            has_pii = 'sensitiveInformationPolicy' in response
+            has_topics = 'topicPolicy' in response
+
             check(
                 has_content and has_pii and has_topics,
                 5,
@@ -323,7 +335,8 @@ class TestTask4(unittest.TestCase):
             import agent_orchestrator  # noqa: F401 - registers bedrock-agentcore compat patch
         except ImportError as e:
             self.fail(f"Could not import agent_orchestrator: {e}")
-        self.agentcore = boto3.client('bedrock-agentcore', region_name=config.AWS_REGION)
+        self.agentcore = boto3.client(
+            'bedrock-agentcore', region_name=config.AWS_REGION)
 
     def test_4_1_memory_is_configured(self):
         """AgentCore Memory should be enabled on the runtime."""
@@ -331,14 +344,17 @@ class TestTask4(unittest.TestCase):
         try:
             runtime_arn = config.AGENTCORE_RUNTIME_ARN
             if not runtime_arn:
-                check(False, 15, "", "AGENTCORE_RUNTIME_ARN not set - complete Task 3 first")
+                check(False, 15, "",
+                      "AGENTCORE_RUNTIME_ARN not set - complete Task 3 first")
                 return
 
             runtime_id = runtime_arn.split('/')[-1]
-            response = self.agentcore.get_agent_runtime(agentRuntimeId=runtime_id)
+            response = self.agentcore.get_agent_runtime(
+                agentRuntimeId=runtime_id)
 
             memory_config = response.get('memoryConfiguration', {})
-            memory_enabled = 'SESSION_SUMMARY' in memory_config.get('enabledMemoryTypes', [])
+            memory_enabled = 'SESSION_SUMMARY' in memory_config.get(
+                'enabledMemoryTypes', [])
 
             check(
                 memory_enabled,
@@ -358,7 +374,8 @@ class TestTask4(unittest.TestCase):
 class TestTask5(unittest.TestCase):
 
     def setUp(self):
-        self.bedrock_agent = boto3.client('bedrock-agent', region_name=config.AWS_REGION)
+        self.bedrock_agent = boto3.client(
+            'bedrock-agent', region_name=config.AWS_REGION)
 
     def test_5_1_returns_kb_configured(self):
         """RETURNS_KB_ID should be set and the Knowledge Base should be active."""
@@ -372,8 +389,10 @@ class TestTask5(unittest.TestCase):
         )
         if kb_id:
             try:
-                response = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)
-                status = response.get('knowledgeBase', {}).get('status', 'UNKNOWN')
+                response = self.bedrock_agent.get_knowledge_base(
+                    knowledgeBaseId=kb_id)
+                status = response.get('knowledgeBase', {}).get(
+                    'status', 'UNKNOWN')
                 check(
                     status == 'ACTIVE',
                     0,
@@ -394,8 +413,10 @@ class TestTask5(unittest.TestCase):
         )
         if kb_id:
             try:
-                response = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)
-                status = response.get('knowledgeBase', {}).get('status', 'UNKNOWN')
+                response = self.bedrock_agent.get_knowledge_base(
+                    knowledgeBaseId=kb_id)
+                status = response.get('knowledgeBase', {}).get(
+                    'status', 'UNKNOWN')
                 check(
                     status == 'ACTIVE',
                     0,
@@ -416,8 +437,10 @@ class TestTask5(unittest.TestCase):
         )
         if kb_id:
             try:
-                response = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)
-                status = response.get('knowledgeBase', {}).get('status', 'UNKNOWN')
+                response = self.bedrock_agent.get_knowledge_base(
+                    knowledgeBaseId=kb_id)
+                status = response.get('knowledgeBase', {}).get(
+                    'status', 'UNKNOWN')
                 check(
                     status == 'ACTIVE',
                     0,
@@ -426,6 +449,75 @@ class TestTask5(unittest.TestCase):
                 )
             except Exception as e:
                 check(False, 0, "", f"Error verifying Warranty KB: {e}")
+
+    def test_5_parallel_retrieval(self):
+        """search_all_policies() should return non-empty results from all three KBs."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        kbs = {
+            'Returns':  config.RETURNS_KB_ID,
+            'Shipping': config.SHIPPING_KB_ID,
+            'Warranty': config.WARRANTY_KB_ID,
+        }
+        if not all(kbs.values()):
+            check(False, 0, "",
+                  "Skipping parallel retrieval - one or more KB IDs are unset")
+            return
+
+        # ── 1. Each KB must return real passages when queried in parallel ──
+        try:
+            from bedrock_kb_retrieval import retrieve_from_knowledge_base
+        except ImportError as e:
+            check(False, 0, "", f"Could not import bedrock_kb_retrieval: {e}")
+            return
+
+        query = ("What is the return window, how long does standard shipping "
+                 "take, and what does the warranty cover?")
+
+        def _retrieve(item):
+            domain, kb_id = item
+            return domain, retrieve_from_knowledge_base(kb_id, query)
+
+        start = time.time()
+        with ThreadPoolExecutor(max_workers=len(kbs)) as executor:
+            raw = dict(executor.map(_retrieve, kbs.items()))
+        elapsed = time.time() - start
+
+        for domain in ('Returns', 'Shipping', 'Warranty'):
+            results = raw.get(domain, [])
+            grounded = [r for r in results if r.get(
+                'source') != 'error' and r.get('text')]
+            check(
+                bool(grounded),
+                0,
+                f"{domain} KB returned {len(grounded)} passage(s) in parallel retrieval",
+                f"{domain} KB returned no usable passages - sync the data source in AWS Console",
+                f"Raw results: {results}"
+            )
+
+        # ── 2. search_all_policies() must combine all three into one answer ──
+        try:
+            import agent_orchestrator as ao
+            policy_agent = ao.build_policy_agent()
+            combined = str(policy_agent.tool.search_all_policies(query=query))
+        except Exception as e:
+            check(False, 0, "", f"Error calling search_all_policies(): {e}")
+            return
+
+        sections = re.split(r'=== (\w+) Policy ===', combined)
+        bodies = dict(zip(sections[1::2], sections[2::2]))
+        for domain in ('Returns', 'Shipping', 'Warranty'):
+            body = bodies.get(domain, '').strip()
+            check(
+                bool(body) and '[No results]' not in body,
+                0,
+                f"search_all_policies() returned a non-empty {domain} section",
+                f"search_all_policies() returned no {domain} content",
+                f"Combined output: {combined[:500]}"
+            )
+
+        print(
+            f"         {Colors.CYAN}Parallel KB fan-out completed in {elapsed:.1f}s{Colors.RESET}")
 
 
 # ═══════════════════════════════════════════════════════
@@ -441,7 +533,8 @@ class TestTask6(unittest.TestCase):
             import agent_orchestrator  # noqa: F401 - registers bedrock-agentcore compat patch
         except ImportError as e:
             self.fail(f"Could not import agent_orchestrator: {e}")
-        self.agentcore = boto3.client('bedrock-agentcore-control', region_name=config.AWS_REGION)
+        self.agentcore = boto3.client(
+            'bedrock-agentcore-control', region_name=config.AWS_REGION)
         self.logs = boto3.client('logs', region_name=config.AWS_REGION)
 
     def test_6_1_cloudwatch_logging_enabled(self):
@@ -450,17 +543,19 @@ class TestTask6(unittest.TestCase):
         try:
             runtime_arn = config.AGENTCORE_RUNTIME_ARN
             if not runtime_arn:
-                check(False, 10, "", "AGENTCORE_RUNTIME_ARN not set - complete Task 3 first")
+                check(False, 10, "",
+                      "AGENTCORE_RUNTIME_ARN not set - complete Task 3 first")
                 return
-            
+
             runtime_id = runtime_arn.split('/')[-1]
             response = self.agentcore.get_agent_runtime_logging_configuration(
                 agentRuntimeId=runtime_id
             )
-            
-            cw_config = response.get('loggingConfiguration', {}).get('cloudWatchConfig', {})
+
+            cw_config = response.get('loggingConfiguration', {}).get(
+                'cloudWatchConfig', {})
             cw_enabled = cw_config.get('enabled', False)
-            
+
             check(
                 cw_enabled,
                 10,
@@ -478,15 +573,16 @@ class TestTask6(unittest.TestCase):
             if not runtime_arn:
                 check(False, 10, "", "AGENTCORE_RUNTIME_ARN not set")
                 return
-            
+
             runtime_id = runtime_arn.split('/')[-1]
             response = self.agentcore.get_agent_runtime_logging_configuration(
                 agentRuntimeId=runtime_id
             )
-            
-            xray_config = response.get('loggingConfiguration', {}).get('xRayConfig', {})
+
+            xray_config = response.get(
+                'loggingConfiguration', {}).get('xRayConfig', {})
             xray_enabled = xray_config.get('enabled', False)
-            
+
             check(
                 xray_enabled,
                 10,
@@ -510,39 +606,48 @@ TASK_SUITES = {
     'task6': TestTask6,
 }
 
+
 def run_task(task_name: str):
     suite = unittest.TestLoader().loadTestsFromTestCase(TASK_SUITES[task_name])
-    unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, 'w', encoding='utf-8')).run(suite)
+    unittest.TextTestRunner(verbosity=0, stream=open(
+        os.devnull, 'w', encoding='utf-8')).run(suite)
+
 
 def print_score():
     print(f"\n{'═'*55}")
-    pct = (score['earned'] / score['possible'] * 100) if score['possible'] > 0 else 0
+    pct = (score['earned'] / score['possible']
+           * 100) if score['possible'] > 0 else 0
     color = Colors.GREEN if pct >= 70 else Colors.YELLOW if pct >= 50 else Colors.RED
-    print(f"  {Colors.BOLD}Score: {color}{score['earned']}/{score['possible']} pts ({pct:.0f}%){Colors.RESET}")
+    print(
+        f"  {Colors.BOLD}Score: {color}{score['earned']}/{score['possible']} pts ({pct:.0f}%){Colors.RESET}")
     print(f"{'═'*55}\n")
 
 
 if __name__ == '__main__':
     arg = sys.argv[1] if len(sys.argv) > 1 else 'all'
-    
+
     if arg == 'all':
         tasks = ['task2', 'task3', 'task4', 'task5', 'task6']
     elif arg in TASK_SUITES:
         tasks = [arg]
     else:
         print(f"Unknown argument: {arg}")
-        print(f"Usage: python test_agent.py [{'|'.join(TASK_SUITES.keys())}|all]")
+        print(
+            f"Usage: python test_agent.py [{'|'.join(TASK_SUITES.keys())}|all]")
         sys.exit(1)
-    
+
     for task in tasks:
         run_task(task)
-    
+
     print_score()
-    
+
     if score['earned'] == score['possible']:
-        print(f"  {Colors.GREEN}{Colors.BOLD}🎉 Perfect score! All tasks complete.{Colors.RESET}")
+        print(
+            f"  {Colors.GREEN}{Colors.BOLD}🎉 Perfect score! All tasks complete.{Colors.RESET}")
     elif score['earned'] >= score['possible'] * 0.7:
-        print(f"  {Colors.YELLOW}{Colors.BOLD}Good progress! Review failed checks above.{Colors.RESET}")
+        print(
+            f"  {Colors.YELLOW}{Colors.BOLD}Good progress! Review failed checks above.{Colors.RESET}")
     else:
-        print(f"  {Colors.RED}Keep going - re-read the TODO comments carefully.{Colors.RESET}")
+        print(
+            f"  {Colors.RED}Keep going - re-read the TODO comments carefully.{Colors.RESET}")
     print()
