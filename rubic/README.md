@@ -40,16 +40,22 @@ Runs 3 hardcoded scenarios and prints raw responses
 
 ![alt text](test_cust_001.png)
 
+![alt text](test_cust_001_trace.png)
+
 ### CUST-002
 
 ![alt text](test_cust_002_a.png)
 
 ![alt text](test_cust_002_b.png)
 
+![alt text](test_cust_002_trace.png)
+
 ### CUST-003
 
 ![alt text](test_cust_003.png)
 
-### X-Ray trace
+![alt text](test_cust_003_trace.png)
 
-![alt text](trace.png)
+### X-Ray trace map
+
+![alt text](trace_map.png)
