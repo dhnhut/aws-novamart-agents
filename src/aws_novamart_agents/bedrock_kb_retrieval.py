@@ -69,7 +69,11 @@ def retrieve_from_knowledge_base(
             knowledgeBaseId=kb_id,
             retrievalQuery={'text': query},
             retrievalConfiguration={
-                'vectorSearchConfiguration': {
+                # PROJECT ASKS FOR vectorSearchConfiguration BUT ACCOUNT DOES NOT HAVE ACCESS TO IT - USE MANAGEDSEARCHCONFIGURATION INSTEAD
+                # MANAGED knowledge bases reject 'vectorSearchConfiguration' with a
+                # ValidationException - AWS owns the vector store, so the managed
+                # search shape is the only one accepted. Switched deliberately.
+                'managedSearchConfiguration': {
                     'numberOfResults': top_k
                 }
             }
@@ -86,7 +90,7 @@ def retrieve_from_knowledge_base(
     for item in response.get('retrievalResults', []):
         content = item.get('content', {})
         location = item.get('location', {})
-        score    = item.get('score', 0.0)
+        score = item.get('score', 0.0)
 
         # Extract text - KB returns either plain text or a structured object
         text = content.get('text', '')
