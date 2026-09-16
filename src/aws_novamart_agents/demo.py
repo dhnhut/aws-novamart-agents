@@ -15,6 +15,7 @@ import sys
 import uuid
 
 from agent_utils import _trace_writer, _real_stdout, _strip_xml_tags
+import xray_tracing as xray
 from agent_orchestrator import (
     build_inventory_agent,
     build_refund_agent,
@@ -57,7 +58,10 @@ print(f"Query    : {QUERY}\n")
 trace.new_turn()
 sys.stdout = _trace_writer
 try:
-    response = orchestrator(prompt)
+    # xray.traced_turn opens the NovaMart-Orchestrator root segment, so this
+    # run also shows up as one connected graph in the X-Ray Service Map.
+    with xray.traced_turn(session_id, CUSTOMER_ID, QUERY) as turn:
+        response = orchestrator(prompt)
 finally:
     sys.stdout = _real_stdout   # always restore, even on exception
 
@@ -75,4 +79,7 @@ print("  AGENT RESPONSE")
 print(f"{'=' * 68}")
 for line in text.splitlines():
     print(f"  {line}")
-print(f"{'=' * 68}\n")
+print(f"{'=' * 68}")
+if turn.trace_id:
+    print(f"  X-Ray trace : {xray.console_url(turn.trace_id)}")
+print()

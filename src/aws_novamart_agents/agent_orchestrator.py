@@ -41,6 +41,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from boto3.dynamodb.conditions import Key
 from bedrock_kb_retrieval import retrieve_from_knowledge_base, format_kb_results
+import xray_tracing as xray
 import config
 
 import boto3
@@ -55,6 +56,7 @@ import re
 import io
 import zipfile
 import threading
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -193,6 +195,18 @@ def _apply_guardrail(model: BedrockModel) -> BedrockModel:
         guardrail_trace='enabled',
     )
     return model
+
+
+# ───────────────────────────────────────────────────
+# X-RAY SERVICE MAP NODES
+# ───────────────────────────────────────────────────
+# One Service Map node per specialist agent, keyed by the WorkflowState column
+# that agent writes. Derived from _AGENT_META so the two can never drift:
+#   'inventory_agent' -> 'INVENTORY AGENT' -> 'NovaMart-InventoryAgent'
+_AGENT_NODE = {
+    column: xray.node_name(label.title().replace(' ', ''))
+    for column, (_, label, _, _) in _AGENT_META.items()
+}
 
 
 # ═══════════════════════════════════════════════════════
@@ -602,18 +616,30 @@ def build_policy_agent() -> Agent:
             be suppressed with a thread-local capture approach.
             Results are returned as values and printed cleanly and
             sequentially by trace.kb_result() after all futures join.
+
+            Each sub-agent also gets its own X-Ray node, hanging off
+            NovaMart-PolicyAgent in the Service Map.
             """
             try:
-                return domain, str(agent(query))
+                with xray.traced_call(xray.node_name(f'{domain}KB'),
+                                      {'kb_domain': domain}):
+                    return domain, str(agent(query))
             except Exception as exc:
                 return domain, f"[{domain} policy lookup failed: {exc}]"
 
         # Use ThreadPoolExecutor to run all three retrievers in parallel
         # Collect results into a dict: {'Returns': '...', 'Shipping': '...', ...}
+        #
+        # ThreadPoolExecutor.submit does NOT carry contextvars into the worker
+        # thread, so each retriever is handed its own copy of this thread's
+        # context - otherwise the KB sub-agents would have no parent span and
+        # would be missing from the Service Map. (Strands makes the same copy
+        # internally, which is why nesting works everywhere else for free.)
         results = {}
         with ThreadPoolExecutor(max_workers=len(retrievers)) as executor:
             futures = [
-                executor.submit(_run_retriever, domain, agent, query)
+                executor.submit(contextvars.copy_context().run,
+                                _run_retriever, domain, agent, query)
                 for domain, agent in retrievers.items()
             ]
             for future in as_completed(futures):
@@ -746,7 +772,16 @@ def build_orchestrator_agent(
                           prompt: str, customer_id: str = None) -> str:
         # trace.step_start(column)
         # trace.agent_section(_AGENT_META[column][1])
-        result = str(agent(prompt))
+
+        # X-Ray: records the caller-side 'remote' subsegment plus the worker's
+        # own segment, which is what draws the Orchestrator -> worker edge in
+        # the Service Map. No-op when tracing is disabled.
+        with xray.traced_call(_AGENT_NODE[column],
+                              {'session_id':  session_id,
+                               'customer_id': customer_id,
+                               'agent':       column}) as span:
+            result = str(agent(prompt))
+            span.add_metadata(response_chars=len(result))
 
         state = _read_workflow_state(session_id)
         # if not state:
@@ -754,8 +789,10 @@ def build_orchestrator_agent(
         #         session_id, customer_id or "unknown")
         expected_version = state.get("version", 0)
 
-        _update_workflow_state(
-            session_id, updates={column: result}, expected_version=expected_version)
+        with xray.aws_subsegment('DynamoDB', operation='UpdateItem',
+                                 table_name=config.WORKFLOW_STATE_TABLE):
+            _update_workflow_state(
+                session_id, updates={column: result}, expected_version=expected_version)
         # trace.step_done(column, expected_version)
         return result
 
@@ -1143,6 +1180,21 @@ def configure_observability(runtime_arn: str) -> None:
     Configure AgentCore Observability:
     - Agent logs → CloudWatch Logs at INFO level
     - Execution traces → AWS X-Ray at 100% sampling
+
+    IMPORTANT - what this call actually does:
+    put_agent_runtime_logging_configuration is NOT a real operation of the
+    bedrock-agentcore-control API (botocore's service model has no logging
+    operations at all). It resolves only because the pre-written compatibility
+    patch at the top of this file injects it, returning HTTP 200 and a canned
+    xRayConfig. So this function configures the runtime on paper, and
+    tests/test_agent.py task6 asserts against that canned response.
+
+    It is also the wrong layer for the project's tracing deliverable: the
+    runtime-level setting would only cover requests sent through
+    invoke_agent(), whereas `python agent_orchestrator.py test` runs the agent
+    graph in this process. The traces behind the X-Ray Service Map therefore
+    come from xray_tracing.py, which emits segments for the real in-process
+    call graph via xray:PutTraceSegments.
     """
     runtime_id = runtime_arn.split('/')[-1]
 
@@ -1181,6 +1233,10 @@ def configure_observability(runtime_arn: str) -> None:
             f"  Observability configured: CloudWatch log group "
             f"'{cw_config['logGroupName']}' (level={cw_config['logLevel']}), "
             f"X-Ray sampling rate={xray_config['samplingRate']}"
+        )
+        print(
+            f"  Service Map traces are emitted by xray_tracing.py during "
+            f"local runs (set XRAY_TRACING=0 to disable)"
         )
     except Exception as e:
         print(f"[Note] Logging config skipped (SDK version mismatch): {e}")
@@ -1511,8 +1567,17 @@ if __name__ == '__main__':
             print(f"Session: {session_id} | Customer: {customer_id}")
             print(f"Query: {query}")
             prompt = f"[Session ID: {session_id}] [Customer ID: {customer_id}] {query}"
-            response = orchestrator(prompt)
+            # One X-Ray trace per scenario - the root NovaMart-Orchestrator node
+            # every agent hop below it attaches to.
+            with xray.traced_turn(session_id, customer_id, query) as turn:
+                response = orchestrator(prompt)
             print(f"Response: {response}")
+            if turn.trace_id:
+                print(f"X-Ray trace : {xray.console_url(turn.trace_id)}")
+
+        if xray.ENABLED:
+            xray.flush()
+            print(f"\nX-Ray Service Map: {xray.service_map_url()}")
 
     elif len(sys.argv) > 1 and sys.argv[1] == 'chat':
         # ── Interactive terminal chat - educational mode ───────────────────
@@ -1607,7 +1672,8 @@ if __name__ == '__main__':
             trace.new_turn()
             sys.stdout = _trace_writer
             try:
-                response = orchestrator(prompt)
+                with xray.traced_turn(session_id, customer_id, user_input) as turn:
+                    response = orchestrator(prompt)
             finally:
                 sys.stdout = _real_stdout   # always restore, even on exception
 
@@ -1629,6 +1695,9 @@ if __name__ == '__main__':
             for line in text.splitlines():
                 print(f"  {line}")
             print(f"  {_C.GRY}{'=' * W}{_C.RESET}")
+            if turn.trace_id:
+                print(f"  {_C.GRY}X-Ray trace : "
+                      f"{xray.console_url(turn.trace_id)}{_C.RESET}")
             print()
 
     else:

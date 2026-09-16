@@ -494,7 +494,18 @@ Check agent system prompts and tool docstrings - agents read docstrings to under
 Review `_update_workflow_state()` logic - optimistic locking retries on version conflicts.
 
 **X-Ray traces not appearing?**
-Ensure `configure_observability()` is called and sampling rate is > 0.
+`configure_observability()` is *not* the source of these traces - it configures the deployed AgentCore Runtime, while `agent_orchestrator.py test` runs the agent graph in this process. Traces come from `src/aws_novamart_agents/xray_tracing.py`, which emits segments directly. Check, in order:
+
+1. `XRAY_TRACING` is not set to `0` in your environment or `.env`.
+2. Your credentials allow `xray:PutTraceSegments`:
+   ```bash
+   aws xray put-trace-segments --trace-segment-documents \
+     "{\"name\":\"perm-check\",\"id\":\"$(openssl rand -hex 8)\",\"trace_id\":\"1-$(printf '%x' $(date +%s))-$(openssl rand -hex 12)\",\"start_time\":$(date +%s),\"end_time\":$(date +%s)}"
+   ```
+   Expect `"UnprocessedTraceSegments": []`.
+3. The console is in the same region as `AWS_REGION` (traces are regional).
+4. The Service Map time range covers the run - it defaults to a window that may predate it. Use "last 5 minutes" right after running.
+5. Segments take ~30s to appear in the Service Map (individual traces show up sooner).
 
 ---
 

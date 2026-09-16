@@ -45,3 +45,7 @@ Runs 3 hardcoded scenarios and prints raw responses
 ### CUST-003
 
 ![alt text](test_cust_003.png)
+
+### X-Ray trace
+
+![alt text](trace.png)
