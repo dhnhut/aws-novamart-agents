@@ -13,7 +13,6 @@ Run after each task to validate your implementation:
 
 """
 
-import config
 import sys
 import os
 import json
@@ -27,6 +26,8 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(
     __file__), '..', 'src', 'aws_novamart_agents'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import config  # noqa: E402  (needs the sys.path entries above)
 
 # ─────────────────────────────────────────────────────
 # HELPER UTILITIES
